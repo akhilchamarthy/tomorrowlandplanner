@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>TML W2 2026 Planner</title>
+  <meta name="description" content="Personal timetable planner for Tomorrowland Belgium 2026 Weekend 2">
+  <meta name="theme-color" content="#12101a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TML W2">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Tomorrowland <span class="w2">W2 2026</span></h1>
+    <div class="day-picker" id="dayPicker"></div>
+  </header>
+
+  <main id="main">
+    <section id="view-timetable" class="view">
+      <div class="search-row">
+        <input type="search" id="searchInput" placeholder="Search artists…" autocomplete="off">
+      </div>
+      <div id="timetableList"></div>
+    </section>
+
+    <section id="view-mine" class="view" hidden>
+      <div id="myList"></div>
+      <button class="fab" id="addCustomBtn" title="Add custom entry">+</button>
+    </section>
+
+    <section id="view-stages" class="view" hidden>
+      <p class="hint">Show/hide stages, reorder, and pick accent colors. Hidden stages disappear from the Timetable tab.</p>
+      <div id="stageList"></div>
+      <div class="backup">
+        <h2>Backup</h2>
+        <p class="hint">iOS can evict web app storage. Export your plan as text and keep it in Notes.</p>
+        <div class="backup-btns">
+          <button id="exportBtn">Export</button>
+          <button id="importBtn">Import</button>
+        </div>
+        <textarea id="backupBox" rows="4" placeholder="Exported plan appears here. Paste a backup here and tap Import to restore."></textarea>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-tab="timetable" class="tab active">Timetable</button>
+    <button data-tab="mine" class="tab">My Timetable</button>
+    <button data-tab="stages" class="tab">Stages</button>
+  </nav>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal">
+      <h2 id="modalTitle">Add entry</h2>
+      <form id="customForm">
+        <label>Name<input type="text" id="cName" required placeholder="e.g. Meet at Freedom entrance"></label>
+        <label>Day
+          <select id="cDay"></select>
+        </label>
+        <label>Stage / location
+          <select id="cStage"></select>
+        </label>
+        <label id="cLocLabel" hidden>Location text<input type="text" id="cLoc" placeholder="e.g. Freedom entrance"></label>
+        <div class="time-row">
+          <label>Start<input type="time" id="cStart" required value="18:00"></label>
+          <label>End<input type="time" id="cEnd" required value="19:00"></label>
+        </div>
+        <div class="modal-btns">
+          <button type="button" id="cCancel">Cancel</button>
+          <button type="button" id="cDelete" class="danger" hidden>Delete</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

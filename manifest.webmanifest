@@ -1,0 +1,14 @@
+{
+  "name": "Tomorrowland W2 2026 Planner",
+  "short_name": "TML W2",
+  "description": "Personal timetable planner for Tomorrowland Belgium 2026 Weekend 2",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#12101a",
+  "theme_color": "#12101a",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
