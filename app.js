@@ -12,6 +12,7 @@
     stageColors: {},
     lastDay: "fri",
     timetableView: "list",
+    myView: "list",
   });
 
   let state = load();
@@ -115,6 +116,14 @@
     });
   });
 
+  const myViewSwitch = el("myViewSwitch");
+  myViewSwitch.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.myView = btn.dataset.view;
+      save(); renderMine();
+    });
+  });
+
   const openStages = new Set(); // per-session collapse state
 
   function setRowHTML(set, cls) {
@@ -150,8 +159,17 @@
       return;
     }
 
-    if (state.timetableView === "calendar") { renderCalendarView(box, now); return; }
-    if (state.timetableView === "timeline") { renderTimelineView(box, now); return; }
+    if (state.timetableView !== "list") {
+      const entries = visibleStagesWithSets(state.lastDay);
+      if (!entries.length) {
+        box.innerHTML = `<div class="empty">All stages are hidden. Unhide some in the Stages tab.</div>`;
+        return;
+      }
+      const opts = { mine: false };
+      if (state.timetableView === "calendar") renderCalendarView(box, now, entries, opts);
+      else renderTimelineView(box, now, entries, opts);
+      return;
+    }
     renderListView(box, now);
   }
 
@@ -189,11 +207,13 @@
   }
 
   // ---------- grid views ----------
+  // grid column/row entries: { label, color, sets }
   function visibleStagesWithSets(dayId) {
     return orderedStages()
       .filter(st => !state.hiddenStageIds.includes(st.id))
       .map(st => ({
-        stage: st,
+        label: st.name,
+        color: stageColor(st.id),
         sets: FESTIVAL.sets
           .filter(s => s.stageId === st.id && s.dayId === dayId)
           .sort((a, b) => toMin(a.start) - toMin(b.start)),
@@ -201,10 +221,51 @@
       .filter(e => e.sets.length);
   }
 
+  // group my-timetable items into entries per stage / custom location
+  function myEntries(items) {
+    const byKey = new Map();
+    items.forEach(it => {
+      const key = it.stageId || "loc:" + (it.location || "Custom");
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          label: stageName(it),
+          color: it.stageId ? stageColor(it.stageId) : "#8a8a9a",
+          sets: [],
+        });
+      }
+      byKey.get(key).sets.push(it);
+    });
+    const idx = e => e.key.startsWith("loc:") ? 1e9 : state.stageOrder.indexOf(e.key);
+    return [...byKey.values()]
+      .map(e => { e.sets.sort((a, b) => toMin(a.start) - toMin(b.start)); return e; })
+      .sort((a, b) => idx(a) - idx(b));
+  }
+
+  function computeClashes(items) {
+    const clashes = new Set();
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        if (toMin(items[j].start) < toMin(items[i].end) && toMin(items[i].start) < toMin(items[j].end)) {
+          clashes.add(items[i].id); clashes.add(items[j].id);
+        }
+      }
+    }
+    return clashes;
+  }
+
   function dayEndMin(entries) {
     let end = 780; // at least until 01:00
     entries.forEach(e => e.sets.forEach(s => { end = Math.max(end, toMin(s.end)); }));
     return Math.ceil(end / 60) * 60;
+  }
+
+  // my-timetable grids start at the first planned item instead of noon
+  function gridStartMin(entries, opts) {
+    if (!opts.mine) return 0;
+    let start = Infinity;
+    entries.forEach(e => e.sets.forEach(s => { start = Math.min(start, toMin(s.start)); }));
+    return Math.floor(start / 60) * 60;
   }
 
   function hourLabel(min) {
@@ -236,22 +297,31 @@
     return out;
   }
 
-  function blockHTML(set, style) {
-    const starred = state.starredSetIds.includes(set.id);
-    return `<div class="cal-block ${starred ? "starred" : ""}" data-set="${set.id}"
-      style="${style};--set-color:${stageColor(set.stageId)}">
+  function blockHTML(set, style, color, opts) {
+    const cls = opts.mine
+      ? (opts.clashes.has(set.id) ? "clash" : "")
+      : (state.starredSetIds.includes(set.id) ? "starred" : "");
+    return `<div class="cal-block ${cls}" data-set="${set.id}"
+      style="${style};--set-color:${color}">
       <div class="b-artist">${esc(set.artist)}</div><div class="b-time">${set.start}–${set.end}</div>
     </div>`;
   }
 
-  function bindBlocks(box) {
+  function bindBlocks(box, opts) {
     box.querySelectorAll(".cal-block").forEach(b => {
       b.addEventListener("click", () => {
         const id = b.dataset.set;
-        const i = state.starredSetIds.indexOf(id);
-        if (i >= 0) state.starredSetIds.splice(i, 1); else state.starredSetIds.push(id);
-        save();
-        b.classList.toggle("starred", i < 0);
+        if (opts.mine) {
+          // custom entry → edit; starred set → remove from plan
+          if (state.customSets.some(s => s.id === id)) { openModal(id); return; }
+          state.starredSetIds = state.starredSetIds.filter(x => x !== id);
+          save(); renderMine();
+        } else {
+          const i = state.starredSetIds.indexOf(id);
+          if (i >= 0) state.starredSetIds.splice(i, 1); else state.starredSetIds.push(id);
+          save();
+          b.classList.toggle("starred", i < 0);
+        }
       });
     });
   }
@@ -266,26 +336,22 @@
     if (sc) sizeScroller(sc);
   });
 
-  // stages across the top, time down the left
-  function renderCalendarView(box, now) {
-    const entries = visibleStagesWithSets(state.lastDay);
-    if (!entries.length) {
-      box.innerHTML = `<div class="empty">All stages are hidden. Unhide some in the Stages tab.</div>`;
-      return;
-    }
+  // columns across the top, time down the left
+  function renderCalendarView(box, now, entries, opts) {
     const COL = 120, PPM = 1.1, GUT = 46, HEAD = 34;
+    const startMin = gridStartMin(entries, opts);
     const endMin = dayEndMin(entries);
-    const H = endMin * PPM;
+    const H = (endMin - startMin) * PPM;
 
     let head = `<div class="cal-head"><div class="cal-corner" style="width:${GUT}px;height:${HEAD}px"></div>`;
     entries.forEach(e => {
-      head += `<div class="cal-head-cell" style="width:${COL}px;--head-color:${stageColor(e.stage.id)}">${esc(e.stage.name)}</div>`;
+      head += `<div class="cal-head-cell" style="width:${COL}px;--head-color:${e.color}">${esc(e.label)}</div>`;
     });
     head += `</div>`;
 
     let gutter = `<div class="cal-gutter" style="width:${GUT}px;height:${H}px">`;
-    for (let m = 60; m <= endMin; m += 60) {
-      gutter += `<div class="gutter-label" style="top:${m * PPM}px">${hourLabel(m)}</div>`;
+    for (let m = startMin + 60; m <= endMin; m += 60) {
+      gutter += `<div class="gutter-label" style="top:${(m - startMin) * PPM}px">${hourLabel(m)}</div>`;
     }
     gutter += `</div>`;
 
@@ -296,53 +362,51 @@
       layoutLanes(e.sets).forEach(({ set, lane, lanes }) => {
         const w = (COL - 6) / lanes;
         canvas += blockHTML(set,
-          `left:${i * COL + 2 + lane * w}px;top:${toMin(set.start) * PPM + 1}px;` +
-          `width:${w - 2}px;height:${(toMin(set.end) - toMin(set.start)) * PPM - 3}px`);
+          `left:${i * COL + 2 + lane * w}px;top:${(toMin(set.start) - startMin) * PPM + 1}px;` +
+          `width:${w - 2}px;height:${(toMin(set.end) - toMin(set.start)) * PPM - 3}px`,
+          e.color, opts);
       });
     });
-    if (now.dayId === state.lastDay && now.min <= endMin) {
-      canvas += `<div class="now-rule h" data-ppm="${PPM}" style="top:${now.min * PPM}px"></div>`;
+    if (now.dayId === state.lastDay && now.min >= startMin && now.min <= endMin) {
+      canvas += `<div class="now-rule h" data-ppm="${PPM}" data-start="${startMin}" style="top:${(now.min - startMin) * PPM}px"></div>`;
     }
     canvas += `</div>`;
 
     box.innerHTML = `<div class="cal-scroll">${head}<div class="cal-body">${gutter}${canvas}</div></div>`;
     const sc = box.firstElementChild;
     sizeScroller(sc);
-    if (now.dayId === state.lastDay) sc.scrollTop = Math.max(0, now.min * PPM - 150);
-    bindBlocks(box);
+    if (now.dayId === state.lastDay) sc.scrollTop = Math.max(0, (now.min - startMin) * PPM - 150);
+    bindBlocks(box, opts);
   }
 
-  // stages down the left, time across the top
-  function renderTimelineView(box, now) {
-    const entries = visibleStagesWithSets(state.lastDay);
-    if (!entries.length) {
-      box.innerHTML = `<div class="empty">All stages are hidden. Unhide some in the Stages tab.</div>`;
-      return;
-    }
+  // rows down the left, time across the top
+  function renderTimelineView(box, now, entries, opts) {
     const LBL = 88, ROW = 50, PPM = 3, HEAD = 24;
+    const startMin = gridStartMin(entries, opts);
     const endMin = dayEndMin(entries);
-    const W = endMin * PPM;
-    const showNow = now.dayId === state.lastDay && now.min <= endMin;
+    const W = (endMin - startMin) * PPM;
+    const showNow = now.dayId === state.lastDay && now.min >= startMin && now.min <= endMin;
 
     let html = `<div class="cal-scroll">`;
     html += `<div class="cal-head"><div class="cal-corner" style="width:${LBL}px;height:${HEAD}px"></div>` +
       `<div class="tl-head-canvas" style="width:${W}px;height:${HEAD}px">`;
-    for (let m = 60; m < endMin; m += 60) {
-      html += `<div class="tl-head-label" style="left:${m * PPM}px">${hourLabel(m)}</div>`;
+    for (let m = startMin + 60; m < endMin; m += 60) {
+      html += `<div class="tl-head-label" style="left:${(m - startMin) * PPM}px">${hourLabel(m)}</div>`;
     }
     html += `</div></div>`;
 
     entries.forEach(e => {
-      html += `<div class="tl-row"><div class="tl-row-label" style="width:${LBL}px;height:${ROW}px;--head-color:${stageColor(e.stage.id)}">${esc(e.stage.name)}</div>`;
+      html += `<div class="tl-row"><div class="tl-row-label" style="width:${LBL}px;height:${ROW}px;--head-color:${e.color}">${esc(e.label)}</div>`;
       html += `<div class="tl-row-canvas" style="width:${W}px;height:${ROW}px;background:` +
         `repeating-linear-gradient(90deg, var(--bg3) 0, var(--bg3) 1px, transparent 1px, transparent ${60 * PPM}px)">`;
       layoutLanes(e.sets).forEach(({ set, lane, lanes }) => {
         const h = (ROW - 4) / lanes;
         html += blockHTML(set,
-          `left:${toMin(set.start) * PPM + 1}px;top:${2 + lane * h}px;` +
-          `width:${(toMin(set.end) - toMin(set.start)) * PPM - 3}px;height:${h - 2}px`);
+          `left:${(toMin(set.start) - startMin) * PPM + 1}px;top:${2 + lane * h}px;` +
+          `width:${(toMin(set.end) - toMin(set.start)) * PPM - 3}px;height:${h - 2}px`,
+          e.color, opts);
       });
-      if (showNow) html += `<div class="now-rule v" data-ppm="${PPM}" style="left:${now.min * PPM}px"></div>`;
+      if (showNow) html += `<div class="now-rule v" data-ppm="${PPM}" data-start="${startMin}" style="left:${(now.min - startMin) * PPM}px"></div>`;
       html += `</div></div>`;
     });
     html += `</div>`;
@@ -350,8 +414,8 @@
     box.innerHTML = html;
     const sc = box.firstElementChild;
     sizeScroller(sc);
-    if (showNow) sc.scrollLeft = Math.max(0, now.min * PPM - 120);
-    bindBlocks(box);
+    if (showNow) sc.scrollLeft = Math.max(0, (now.min - startMin) * PPM - 120);
+    bindBlocks(box, opts);
   }
 
   // move the "now" rule without a full re-render (avoids scroll jumps)
@@ -360,8 +424,9 @@
     document.querySelectorAll(".now-rule").forEach(r => {
       if (now.dayId !== state.lastDay) { r.remove(); return; }
       const ppm = parseFloat(r.dataset.ppm);
-      if (r.classList.contains("h")) r.style.top = (now.min * ppm) + "px";
-      else r.style.left = (now.min * ppm) + "px";
+      const off = (now.min - (parseFloat(r.dataset.start) || 0)) * ppm;
+      if (r.classList.contains("h")) r.style.top = off + "px";
+      else r.style.left = off + "px";
     });
   }
 
@@ -390,6 +455,7 @@
     const items = myItemsForDay(state.lastDay);
     const now = brusselsNow();
     const dayLabel = FESTIVAL.days.find(d => d.id === state.lastDay).label;
+    myViewSwitch.querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.view === state.myView));
 
     if (!items.length) {
       box.innerHTML = `<div class="empty">Nothing planned for ${dayLabel} yet.<br>Star sets in the Timetable tab, or tap + to add your own entry.</div>`;
@@ -397,13 +463,13 @@
     }
 
     // clash detection: overlapping intervals
-    const clashes = new Set();
-    for (let i = 0; i < items.length; i++) {
-      for (let j = i + 1; j < items.length; j++) {
-        if (toMin(items[j].start) < toMin(items[i].end) && toMin(items[i].start) < toMin(items[j].end)) {
-          clashes.add(items[i].id); clashes.add(items[j].id);
-        }
-      }
+    const clashes = computeClashes(items);
+
+    if (state.myView !== "list") {
+      const opts = { mine: true, clashes };
+      if (state.myView === "calendar") renderCalendarView(box, now, myEntries(items), opts);
+      else renderTimelineView(box, now, myEntries(items), opts);
+      return;
     }
 
     let html = "";
@@ -572,11 +638,10 @@
 
   // refresh "now" highlighting every minute (grid views move the rule in place to keep scroll position)
   setInterval(() => {
-    if (activeTab === "mine") renderMine();
-    else if (activeTab === "timetable") {
-      if (document.querySelector(".cal-scroll")) updateNowRules();
-      else renderTimetable();
-    }
+    if (activeTab === "stages") return;
+    if (document.querySelector(".cal-scroll")) updateNowRules();
+    else if (activeTab === "mine") renderMine();
+    else renderTimetable();
   }, 60 * 1000);
 
   // ---------- service worker ----------

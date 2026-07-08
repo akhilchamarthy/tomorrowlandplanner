@@ -172,6 +172,7 @@ body {
   background: color-mix(in srgb, var(--star) 18%, var(--bg2));
 }
 .cal-block.starred .b-artist::before { content: "★ "; color: var(--star); }
+.cal-block.clash { outline: 1.5px solid var(--danger); }
 .now-rule { position: absolute; z-index: 3; background: #37d67a; pointer-events: none; }
 .now-rule::before {
   content: "";
