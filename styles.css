@@ -59,6 +59,133 @@ body {
 }
 .search-row input::placeholder { color: var(--muted); }
 
+.view-switch { display: flex; gap: 6px; margin-top: 8px; }
+.view-switch button {
+  flex: 1;
+  padding: 7px 0;
+  border: 1px solid var(--bg3);
+  border-radius: 10px;
+  background: var(--bg2);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.view-switch button.active { background: var(--bg3); border-color: var(--accent); color: var(--accent); }
+
+/* ---- grid views (calendar + timeline) ---- */
+.cal-scroll {
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid var(--bg3);
+  border-radius: 12px;
+  background: var(--bg);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  position: relative;
+}
+.cal-head { display: flex; position: sticky; top: 0; z-index: 5; width: max-content; }
+.cal-corner {
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  flex: none;
+  background: var(--bg2);
+  border-right: 1px solid var(--bg3);
+  border-bottom: 1px solid var(--bg3);
+}
+.cal-head-cell {
+  flex: none;
+  background: var(--bg2);
+  border-bottom: 2px solid var(--head-color, var(--bg3));
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 8px 4px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-body { display: flex; width: max-content; }
+.cal-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  flex: none;
+  background: var(--bg2);
+  border-right: 1px solid var(--bg3);
+}
+.gutter-label {
+  position: absolute;
+  right: 4px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.cal-canvas { position: relative; flex: none; }
+
+/* timeline (horizontal) view */
+.tl-head-canvas { position: relative; flex: none; background: var(--bg2); border-bottom: 1px solid var(--bg3); }
+.tl-head-label {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-row { display: flex; width: max-content; }
+.tl-row-label {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  flex: none;
+  display: flex;
+  align-items: center;
+  background: var(--bg2);
+  border-right: 1px solid var(--bg3);
+  border-bottom: 1px solid var(--bg3);
+  border-left: 3px solid var(--head-color, var(--bg3));
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 2px 6px;
+}
+.tl-row-canvas { position: relative; flex: none; border-bottom: 1px solid var(--bg3); }
+
+.cal-block {
+  position: absolute;
+  border-radius: 6px;
+  border-left: 3px solid var(--set-color, var(--accent));
+  background: color-mix(in srgb, var(--set-color, var(--accent)) 16%, var(--bg2));
+  padding: 3px 4px;
+  overflow: hidden;
+  cursor: pointer;
+  font-size: 10px;
+}
+.cal-block .b-artist { font-size: 11px; font-weight: 600; line-height: 1.2; overflow: hidden; }
+.cal-block .b-time { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.cal-block.starred {
+  outline: 1.5px solid var(--star);
+  background: color-mix(in srgb, var(--star) 18%, var(--bg2));
+}
+.cal-block.starred .b-artist::before { content: "★ "; color: var(--star); }
+.now-rule { position: absolute; z-index: 3; background: #37d67a; pointer-events: none; }
+.now-rule::before {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #37d67a;
+}
+.now-rule.h { left: 0; right: 0; height: 2px; }
+.now-rule.h::before { left: 0; top: -2.5px; }
+.now-rule.v { top: 0; bottom: 0; width: 2px; }
+.now-rule.v::before { top: 0; left: -2.5px; }
+
 .stage-section { margin-top: 12px; border-radius: 14px; overflow: hidden; background: var(--bg2); }
 .stage-head {
   width: 100%;

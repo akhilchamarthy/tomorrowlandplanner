@@ -11,6 +11,7 @@
     stageOrder: FESTIVAL.stages.map(s => s.id),
     stageColors: {},
     lastDay: "fri",
+    timetableView: "list",
   });
 
   let state = load();
@@ -106,6 +107,14 @@
   const searchInput = el("searchInput");
   searchInput.addEventListener("input", renderTimetable);
 
+  const viewSwitch = el("viewSwitch");
+  viewSwitch.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.timetableView = btn.dataset.view;
+      save(); renderTimetable();
+    });
+  });
+
   const openStages = new Set(); // per-session collapse state
 
   function setRowHTML(set, cls) {
@@ -121,6 +130,7 @@
     const box = el("timetableList");
     const q = searchInput.value.trim().toLowerCase();
     const now = brusselsNow();
+    viewSwitch.querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.view === state.timetableView));
 
     if (q) {
       // flat search results across all days
@@ -140,6 +150,12 @@
       return;
     }
 
+    if (state.timetableView === "calendar") { renderCalendarView(box, now); return; }
+    if (state.timetableView === "timeline") { renderTimelineView(box, now); return; }
+    renderListView(box, now);
+  }
+
+  function renderListView(box, now) {
     let html = "";
     orderedStages().forEach(stage => {
       if (state.hiddenStageIds.includes(stage.id)) return;
@@ -170,6 +186,183 @@
       });
     });
     bindSetRows(box);
+  }
+
+  // ---------- grid views ----------
+  function visibleStagesWithSets(dayId) {
+    return orderedStages()
+      .filter(st => !state.hiddenStageIds.includes(st.id))
+      .map(st => ({
+        stage: st,
+        sets: FESTIVAL.sets
+          .filter(s => s.stageId === st.id && s.dayId === dayId)
+          .sort((a, b) => toMin(a.start) - toMin(b.start)),
+      }))
+      .filter(e => e.sets.length);
+  }
+
+  function dayEndMin(entries) {
+    let end = 780; // at least until 01:00
+    entries.forEach(e => e.sets.forEach(s => { end = Math.max(end, toMin(s.end)); }));
+    return Math.ceil(end / 60) * 60;
+  }
+
+  function hourLabel(min) {
+    return String((12 + Math.floor(min / 60)) % 24).padStart(2, "0") + ":00";
+  }
+
+  // side-by-side lanes for sets that overlap on the same stage
+  function layoutLanes(sets) {
+    const out = [];
+    let cluster = [], clusterEnd = -1;
+    const flush = () => {
+      if (!cluster.length) return;
+      const laneEnds = [];
+      const placed = cluster.map(s => {
+        let lane = laneEnds.findIndex(e => e <= toMin(s.start));
+        if (lane < 0) { lane = laneEnds.length; laneEnds.push(0); }
+        laneEnds[lane] = toMin(s.end);
+        return { set: s, lane };
+      });
+      placed.forEach(p => out.push({ set: p.set, lane: p.lane, lanes: laneEnds.length }));
+      cluster = []; clusterEnd = -1;
+    };
+    sets.forEach(s => {
+      if (cluster.length && toMin(s.start) >= clusterEnd) flush();
+      cluster.push(s);
+      clusterEnd = Math.max(clusterEnd, toMin(s.end));
+    });
+    flush();
+    return out;
+  }
+
+  function blockHTML(set, style) {
+    const starred = state.starredSetIds.includes(set.id);
+    return `<div class="cal-block ${starred ? "starred" : ""}" data-set="${set.id}"
+      style="${style};--set-color:${stageColor(set.stageId)}">
+      <div class="b-artist">${esc(set.artist)}</div><div class="b-time">${set.start}–${set.end}</div>
+    </div>`;
+  }
+
+  function bindBlocks(box) {
+    box.querySelectorAll(".cal-block").forEach(b => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.set;
+        const i = state.starredSetIds.indexOf(id);
+        if (i >= 0) state.starredSetIds.splice(i, 1); else state.starredSetIds.push(id);
+        save();
+        b.classList.toggle("starred", i < 0);
+      });
+    });
+  }
+
+  function sizeScroller(sc) {
+    const top = sc.getBoundingClientRect().top;
+    const tab = document.querySelector(".tabbar").offsetHeight;
+    sc.style.height = Math.max(220, window.innerHeight - top - tab - 10) + "px";
+  }
+  window.addEventListener("resize", () => {
+    const sc = document.querySelector(".cal-scroll");
+    if (sc) sizeScroller(sc);
+  });
+
+  // stages across the top, time down the left
+  function renderCalendarView(box, now) {
+    const entries = visibleStagesWithSets(state.lastDay);
+    if (!entries.length) {
+      box.innerHTML = `<div class="empty">All stages are hidden. Unhide some in the Stages tab.</div>`;
+      return;
+    }
+    const COL = 120, PPM = 1.1, GUT = 46, HEAD = 34;
+    const endMin = dayEndMin(entries);
+    const H = endMin * PPM;
+
+    let head = `<div class="cal-head"><div class="cal-corner" style="width:${GUT}px;height:${HEAD}px"></div>`;
+    entries.forEach(e => {
+      head += `<div class="cal-head-cell" style="width:${COL}px;--head-color:${stageColor(e.stage.id)}">${esc(e.stage.name)}</div>`;
+    });
+    head += `</div>`;
+
+    let gutter = `<div class="cal-gutter" style="width:${GUT}px;height:${H}px">`;
+    for (let m = 60; m <= endMin; m += 60) {
+      gutter += `<div class="gutter-label" style="top:${m * PPM}px">${hourLabel(m)}</div>`;
+    }
+    gutter += `</div>`;
+
+    let canvas = `<div class="cal-canvas" style="width:${entries.length * COL}px;height:${H}px;background:` +
+      `repeating-linear-gradient(180deg, var(--bg3) 0, var(--bg3) 1px, transparent 1px, transparent ${60 * PPM}px),` +
+      `repeating-linear-gradient(90deg, transparent 0, transparent ${COL - 1}px, var(--bg3) ${COL - 1}px, var(--bg3) ${COL}px)">`;
+    entries.forEach((e, i) => {
+      layoutLanes(e.sets).forEach(({ set, lane, lanes }) => {
+        const w = (COL - 6) / lanes;
+        canvas += blockHTML(set,
+          `left:${i * COL + 2 + lane * w}px;top:${toMin(set.start) * PPM + 1}px;` +
+          `width:${w - 2}px;height:${(toMin(set.end) - toMin(set.start)) * PPM - 3}px`);
+      });
+    });
+    if (now.dayId === state.lastDay && now.min <= endMin) {
+      canvas += `<div class="now-rule h" data-ppm="${PPM}" style="top:${now.min * PPM}px"></div>`;
+    }
+    canvas += `</div>`;
+
+    box.innerHTML = `<div class="cal-scroll">${head}<div class="cal-body">${gutter}${canvas}</div></div>`;
+    const sc = box.firstElementChild;
+    sizeScroller(sc);
+    if (now.dayId === state.lastDay) sc.scrollTop = Math.max(0, now.min * PPM - 150);
+    bindBlocks(box);
+  }
+
+  // stages down the left, time across the top
+  function renderTimelineView(box, now) {
+    const entries = visibleStagesWithSets(state.lastDay);
+    if (!entries.length) {
+      box.innerHTML = `<div class="empty">All stages are hidden. Unhide some in the Stages tab.</div>`;
+      return;
+    }
+    const LBL = 88, ROW = 50, PPM = 3, HEAD = 24;
+    const endMin = dayEndMin(entries);
+    const W = endMin * PPM;
+    const showNow = now.dayId === state.lastDay && now.min <= endMin;
+
+    let html = `<div class="cal-scroll">`;
+    html += `<div class="cal-head"><div class="cal-corner" style="width:${LBL}px;height:${HEAD}px"></div>` +
+      `<div class="tl-head-canvas" style="width:${W}px;height:${HEAD}px">`;
+    for (let m = 60; m < endMin; m += 60) {
+      html += `<div class="tl-head-label" style="left:${m * PPM}px">${hourLabel(m)}</div>`;
+    }
+    html += `</div></div>`;
+
+    entries.forEach(e => {
+      html += `<div class="tl-row"><div class="tl-row-label" style="width:${LBL}px;height:${ROW}px;--head-color:${stageColor(e.stage.id)}">${esc(e.stage.name)}</div>`;
+      html += `<div class="tl-row-canvas" style="width:${W}px;height:${ROW}px;background:` +
+        `repeating-linear-gradient(90deg, var(--bg3) 0, var(--bg3) 1px, transparent 1px, transparent ${60 * PPM}px)">`;
+      layoutLanes(e.sets).forEach(({ set, lane, lanes }) => {
+        const h = (ROW - 4) / lanes;
+        html += blockHTML(set,
+          `left:${toMin(set.start) * PPM + 1}px;top:${2 + lane * h}px;` +
+          `width:${(toMin(set.end) - toMin(set.start)) * PPM - 3}px;height:${h - 2}px`);
+      });
+      if (showNow) html += `<div class="now-rule v" data-ppm="${PPM}" style="left:${now.min * PPM}px"></div>`;
+      html += `</div></div>`;
+    });
+    html += `</div>`;
+
+    box.innerHTML = html;
+    const sc = box.firstElementChild;
+    sizeScroller(sc);
+    if (showNow) sc.scrollLeft = Math.max(0, now.min * PPM - 120);
+    bindBlocks(box);
+  }
+
+  // move the "now" rule without a full re-render (avoids scroll jumps)
+  function updateNowRules() {
+    const now = brusselsNow();
+    document.querySelectorAll(".now-rule").forEach(r => {
+      if (now.dayId !== state.lastDay) { r.remove(); return; }
+      const ppm = parseFloat(r.dataset.ppm);
+      if (r.classList.contains("h")) r.style.top = (now.min * ppm) + "px";
+      else r.style.left = (now.min * ppm) + "px";
+    });
   }
 
   function bindSetRows(root) {
@@ -377,8 +570,14 @@
   }
   render();
 
-  // refresh "now" highlighting every minute
-  setInterval(() => { if (activeTab !== "stages") render(); }, 60 * 1000);
+  // refresh "now" highlighting every minute (grid views move the rule in place to keep scroll position)
+  setInterval(() => {
+    if (activeTab === "mine") renderMine();
+    else if (activeTab === "timetable") {
+      if (document.querySelector(".cal-scroll")) updateNowRules();
+      else renderTimetable();
+    }
+  }, 60 * 1000);
 
   // ---------- service worker ----------
   if ("serviceWorker" in navigator) {
