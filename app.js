@@ -92,6 +92,7 @@
       activeTab = btn.dataset.tab;
       document.querySelectorAll(".tabbar .tab").forEach(b => b.classList.toggle("active", b === btn));
       Object.entries(views).forEach(([k, v]) => { v.hidden = k !== activeTab; });
+      dayPicker.hidden = activeTab === "stages"; // stages prefs are day-independent
       render();
     });
   });
@@ -642,8 +643,7 @@
       state.starredSetIds.filter(sid => setsById[sid] && setsById[sid].stageId === id).length +
       state.customSets.filter(s => s.stageId === id).length;
 
-    const visited = [], remaining = [];
-    orderedStages().forEach(st => (starCount(st.id) > 0 ? visited : remaining).push(st));
+    const visitedCount = orderedStages().filter(st => starCount(st.id) > 0).length;
 
     const row = (stage, done) => {
       const hidden = state.hiddenStageIds.includes(stage.id);
@@ -656,15 +656,8 @@
       </div>`;
     };
 
-    let html = "";
-    if (visited.length) {
-      html += `<div class="day-group-label">On your plan · ${visited.length}/${FESTIVAL.stages.length} stages</div>`;
-      visited.forEach(st => { html += row(st, true); });
-    }
-    if (remaining.length) {
-      html += `<div class="day-group-label">Not visited yet</div>`;
-      remaining.forEach(st => { html += row(st, false); });
-    }
+    let html = `<div class="day-group-label">On your plan · ${visitedCount}/${FESTIVAL.stages.length} stages</div>`;
+    orderedStages().forEach(st => { html += row(st, starCount(st.id) > 0); });
     box.innerHTML = html;
 
     box.querySelectorAll(".stage-pref").forEach(rowEl => {

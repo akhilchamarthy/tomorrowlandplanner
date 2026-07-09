@@ -1,4 +1,4 @@
-const CACHE = "tml-planner-v4";
+const CACHE = "tml-planner-v5";
 const ASSETS = [
   "./",
   "./index.html",
