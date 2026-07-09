@@ -13,6 +13,7 @@
     lastDay: "fri",
     timetableView: "list",
     myView: "list",
+    myOrder: {}, // per-day custom order of my-timetable grid stages, e.g. { fri: ["mainstage", "loc:Freedom entrance"] }
   });
 
   let state = load();
@@ -236,10 +237,12 @@
       }
       byKey.get(key).sets.push(it);
     });
-    const idx = e => e.key.startsWith("loc:") ? 1e9 : state.stageOrder.indexOf(e.key);
+    const ord = state.myOrder[state.lastDay] || [];
+    const defIdx = e => e.key.startsWith("loc:") ? 1e9 : state.stageOrder.indexOf(e.key);
+    const ordIdx = e => { const i = ord.indexOf(e.key); return i < 0 ? 1e9 : i; };
     return [...byKey.values()]
       .map(e => { e.sets.sort((a, b) => toMin(a.start) - toMin(b.start)); return e; })
-      .sort((a, b) => idx(a) - idx(b));
+      .sort((a, b) => (ordIdx(a) - ordIdx(b)) || (defIdx(a) - defIdx(b)));
   }
 
   function computeClashes(items) {
@@ -345,7 +348,7 @@
 
     let head = `<div class="cal-head"><div class="cal-corner" style="width:${GUT}px;height:${HEAD}px"></div>`;
     entries.forEach(e => {
-      head += `<div class="cal-head-cell" style="width:${COL}px;--head-color:${e.color}">${esc(e.label)}</div>`;
+      head += `<div class="cal-head-cell${opts.mine ? " draggable" : ""}" style="width:${COL}px;--head-color:${e.color}">${esc(e.label)}</div>`;
     });
     head += `</div>`;
 
@@ -377,6 +380,7 @@
     sizeScroller(sc);
     if (now.dayId === state.lastDay) sc.scrollTop = Math.max(0, (now.min - startMin) * PPM - 150);
     bindBlocks(box, opts);
+    if (opts.mine) makeDraggable(sc, entries, "x", COL, ".cal-head-cell");
   }
 
   // rows down the left, time across the top
@@ -396,7 +400,7 @@
     html += `</div></div>`;
 
     entries.forEach(e => {
-      html += `<div class="tl-row"><div class="tl-row-label" style="width:${LBL}px;height:${ROW}px;--head-color:${e.color}">${esc(e.label)}</div>`;
+      html += `<div class="tl-row"><div class="tl-row-label${opts.mine ? " draggable" : ""}" style="width:${LBL}px;height:${ROW}px;--head-color:${e.color}">${esc(e.label)}</div>`;
       html += `<div class="tl-row-canvas" style="width:${W}px;height:${ROW}px;background:` +
         `repeating-linear-gradient(90deg, var(--bg3) 0, var(--bg3) 1px, transparent 1px, transparent ${60 * PPM}px)">`;
       layoutLanes(e.sets).forEach(({ set, lane, lanes }) => {
@@ -416,6 +420,67 @@
     sizeScroller(sc);
     if (showNow) sc.scrollLeft = Math.max(0, (now.min - startMin) * PPM - 120);
     bindBlocks(box, opts);
+    if (opts.mine) makeDraggable(sc, entries, "y", ROW, ".tl-row-label");
+  }
+
+  // hold a stage name, then drag along `axis` to reorder my-timetable grids;
+  // a quick swipe before the hold fires scrolls the container instead
+  function makeDraggable(sc, entries, axis, size, sel) {
+    const cells = [...sc.querySelectorAll(sel)];
+    cells.forEach((cell, startIdx) => {
+      cell.addEventListener("contextmenu", e => e.preventDefault());
+      cell.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        const startX = e.clientX, startY = e.clientY;
+        let mode = "press", lastX = startX, lastY = startY, targetIdx = startIdx;
+        const timer = setTimeout(() => {
+          if (mode === "press") { mode = "drag"; cell.classList.add("drag-src"); }
+        }, 350);
+        try { cell.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
+
+        const move = ev => {
+          const dx = ev.clientX - startX, dy = ev.clientY - startY;
+          if (mode === "press" && Math.hypot(dx, dy) > 8) { clearTimeout(timer); mode = "scroll"; }
+          if (mode === "scroll") {
+            sc.scrollLeft -= ev.clientX - lastX;
+            sc.scrollTop -= ev.clientY - lastY;
+          } else if (mode === "drag") {
+            const d = axis === "x" ? dx : dy;
+            const t = v => axis === "x" ? `translateX(${v}px)` : `translateY(${v}px)`;
+            cell.style.transform = t(d);
+            targetIdx = Math.max(0, Math.min(cells.length - 1, startIdx + Math.round(d / size)));
+            cells.forEach((c, i) => {
+              if (c === cell) return;
+              let shift = 0;
+              if (startIdx < targetIdx && i > startIdx && i <= targetIdx) shift = -size;
+              else if (targetIdx < startIdx && i >= targetIdx && i < startIdx) shift = size;
+              c.style.transform = shift ? t(shift) : "";
+            });
+          }
+          lastX = ev.clientX; lastY = ev.clientY;
+        };
+        const up = () => {
+          clearTimeout(timer);
+          cell.removeEventListener("pointermove", move);
+          cell.removeEventListener("pointerup", up);
+          cell.removeEventListener("pointercancel", up);
+          if (mode === "drag") {
+            cell.classList.remove("drag-src");
+            if (targetIdx !== startIdx) {
+              const keys = entries.map(en => en.key);
+              const [k] = keys.splice(startIdx, 1);
+              keys.splice(targetIdx, 0, k);
+              state.myOrder[state.lastDay] = keys;
+              save();
+            }
+            renderMine();
+          }
+        };
+        cell.addEventListener("pointermove", move);
+        cell.addEventListener("pointerup", up);
+        cell.addEventListener("pointercancel", up);
+      });
+    });
   }
 
   // move the "now" rule without a full re-render (avoids scroll jumps)
@@ -571,40 +636,49 @@
   // ---------- stages tab ----------
   function renderStages() {
     const box = el("stageList");
-    let html = "";
-    orderedStages().forEach((stage, i) => {
+
+    // a stage counts as "on your plan" once any set there is starred (or a custom entry uses it)
+    const starCount = id =>
+      state.starredSetIds.filter(sid => setsById[sid] && setsById[sid].stageId === id).length +
+      state.customSets.filter(s => s.stageId === id).length;
+
+    const visited = [], remaining = [];
+    orderedStages().forEach(st => (starCount(st.id) > 0 ? visited : remaining).push(st));
+
+    const row = (stage, done) => {
       const hidden = state.hiddenStageIds.includes(stage.id);
-      html += `<div class="stage-pref ${hidden ? "hidden-stage" : ""}" data-stage="${stage.id}">
+      const n = starCount(stage.id);
+      return `<div class="stage-pref ${hidden ? "hidden-stage" : ""}" data-stage="${stage.id}">
+        <span class="check ${done ? "done" : ""}">${done ? "✓" : ""}</span>
         <input type="color" value="${stageColor(stage.id)}" title="Stage color">
-        <span class="name">${esc(stage.name)}</span>
-        <button class="up" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
-        <button class="down" ${i === state.stageOrder.length - 1 ? "disabled" : ""} title="Move down">↓</button>
+        <span class="name">${esc(stage.name)}${done ? ` <span class="sub">${n} starred</span>` : ""}</span>
         <button class="vis" title="${hidden ? "Show" : "Hide"}">${hidden ? "🚫" : "👁"}</button>
       </div>`;
-    });
+    };
+
+    let html = "";
+    if (visited.length) {
+      html += `<div class="day-group-label">On your plan · ${visited.length}/${FESTIVAL.stages.length} stages</div>`;
+      visited.forEach(st => { html += row(st, true); });
+    }
+    if (remaining.length) {
+      html += `<div class="day-group-label">Not visited yet</div>`;
+      remaining.forEach(st => { html += row(st, false); });
+    }
     box.innerHTML = html;
 
-    box.querySelectorAll(".stage-pref").forEach(row => {
-      const id = row.dataset.stage;
-      row.querySelector(".up").addEventListener("click", () => moveStage(id, -1));
-      row.querySelector(".down").addEventListener("click", () => moveStage(id, 1));
-      row.querySelector(".vis").addEventListener("click", () => {
+    box.querySelectorAll(".stage-pref").forEach(rowEl => {
+      const id = rowEl.dataset.stage;
+      rowEl.querySelector(".vis").addEventListener("click", () => {
         const i = state.hiddenStageIds.indexOf(id);
         if (i >= 0) state.hiddenStageIds.splice(i, 1); else state.hiddenStageIds.push(id);
         save(); renderStages();
       });
-      row.querySelector("input[type=color]").addEventListener("change", e => {
+      rowEl.querySelector("input[type=color]").addEventListener("change", e => {
         state.stageColors[id] = e.target.value;
         save(); renderStages();
       });
     });
-  }
-  function moveStage(id, dir) {
-    const i = state.stageOrder.indexOf(id);
-    const j = i + dir;
-    if (j < 0 || j >= state.stageOrder.length) return;
-    [state.stageOrder[i], state.stageOrder[j]] = [state.stageOrder[j], state.stageOrder[i]];
-    save(); renderStages();
   }
 
   // ---------- backup ----------
