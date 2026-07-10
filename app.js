@@ -51,6 +51,15 @@
     const v = h * 60 + m - 720;
     return v < 0 ? v + 1440 : v;
   }
+  // "23:50" -> "11:50 PM" (times are already Europe/Brussels local)
+  function fmt12(t) {
+    const [h0, m] = t.split(":").map(Number);
+    const h = h0 % 12 || 12;
+    const ap = h0 >= 12 ? "PM" : "AM";
+    return m ? `${h}:${String(m).padStart(2, "0")} ${ap}` : `${h} ${ap}`;
+  }
+  const fmtRange = (s, e) => `${fmt12(s)}–${fmt12(e)}`;
+
   function stageColor(id) {
     return state.stageColors[id] || (stagesById[id] ? stagesById[id].color : "#b18cff");
   }
@@ -184,7 +193,7 @@
   function setRowHTML(set, cls) {
     const starred = state.starredSetIds.includes(set.id);
     return `<div class="set-row ${starred ? "starred" : ""} ${cls || ""}" data-set="${set.id}">
-      <span class="time">${set.start}–${set.end}</span>
+      <span class="time">${fmtRange(set.start, set.end)}</span>
       <span class="artist">${esc(set.artist)}${chipsHTML(set.id)}</span>
       <span class="star">${starred && isMust(set.id) ? "★★" : "★"}</span>
     </div>`;
@@ -326,7 +335,8 @@
   }
 
   function hourLabel(min) {
-    return String((12 + Math.floor(min / 60)) % 24).padStart(2, "0") + ":00";
+    const h = (12 + Math.floor(min / 60)) % 24;
+    return `${h % 12 || 12} ${h >= 12 ? "PM" : "AM"}`;
   }
 
   // side-by-side lanes for sets that overlap on the same stage
@@ -366,7 +376,7 @@
     }
     return `<div class="cal-block ${cls}" data-set="${set.id}"
       style="${style};--set-color:${color}">
-      <div class="b-artist">${esc(set.artist)}</div><div class="b-time">${set.start}–${set.end}</div>
+      <div class="b-artist">${esc(set.artist)}</div><div class="b-time">${fmtRange(set.start, set.end)}</div>
       ${chipsHTML(set.id)}
     </div>`;
   }
@@ -621,7 +631,7 @@
     if (!cur.length && !next) { box.innerHTML = ""; return; }
     let html = `<div class="now-card">`;
     cur.forEach(s => {
-      html += `<div class="now-row"><span class="tag now-tag">NOW</span><b>${esc(s.artist)}</b>&nbsp;· ${esc(stageName(s))} · until ${s.end}</div>`;
+      html += `<div class="now-row"><span class="tag now-tag">NOW</span><b>${esc(s.artist)}</b>&nbsp;· ${esc(stageName(s))} · until ${fmt12(s.end)}</div>`;
     });
     if (next) {
       const mins = toMin(next.start) - now.min;
@@ -686,7 +696,7 @@
       html += `<div class="my-set ${playing ? "now-playing" : ""} ${ghost ? "ghost" : ""}" style="border-left-color:${color}">
         <div class="info">
           <div class="artist">${esc(it.artist)}${chipsHTML(it.id)}</div>
-          <div class="meta">${it.start}–${it.end} · ${esc(stageName(it))}</div>
+          <div class="meta">${fmtRange(it.start, it.end)} · ${esc(stageName(it))}</div>
         </div>
         <div class="badges">${badges}</div>
         ${ghost
@@ -909,40 +919,151 @@
     });
   }
 
-  // ---------- day image export ----------
-  el("dayExportBtn").addEventListener("click", () => {
-    const day = FESTIVAL.days.find(d => d.id === state.lastDay);
-    const items = myItemsForDay(state.lastDay);
-    if (!items.length) { alert("Nothing planned for " + day.label + " yet."); return; }
-    const W = 1080, headH = 200, rowH = 96, footH = 90;
-    const H = headH + items.length * rowH + footH;
+  // ---------- day image export (renders in the style of the active view) ----------
+  const F = w => `${w} -apple-system, "Segoe UI", Roboto, sans-serif`;
+
+  function exportSetup(W, H, day) {
     const cv = document.createElement("canvas");
     cv.width = W; cv.height = H;
     const ctx = cv.getContext("2d");
-    const font = w => `${w} -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.fillStyle = "#12101a"; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = "#b18cff"; ctx.font = font("700 34px");
+    ctx.fillStyle = "#b18cff"; ctx.font = F("700 34px");
     ctx.fillText("TOMORROWLAND W2 2026", 48, 82);
-    ctx.fillStyle = "#f0edf7"; ctx.font = font("800 58px");
+    ctx.fillStyle = "#f0edf7"; ctx.font = F("800 58px");
     ctx.fillText(day.label + (state.myName ? " · " + state.myName : ""), 48, 152);
+    return { cv, ctx };
+  }
+
+  function rr(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else ctx.rect(x, y, w, h);
+  }
+
+  function itemSpan(items) {
+    let start = Infinity, end = 0;
+    items.forEach(s => {
+      start = Math.min(start, toMin(s.start));
+      end = Math.max(end, toMin(s.end));
+    });
+    return { startMin: Math.floor(start / 60) * 60, endMin: Math.ceil(end / 60) * 60 };
+  }
+
+  function exportListImage(day, items) {
+    const W = 1080, headH = 200, rowH = 96, footH = 90;
+    const H = headH + items.length * rowH + footH;
+    const { cv, ctx } = exportSetup(W, H, day);
     const clashes = computeClashes(items);
     items.forEach((it, i) => {
       const y = headH + i * rowH;
       ctx.fillStyle = it.stageId ? stageColor(it.stageId) : "#8a8a9a";
       ctx.fillRect(48, y + 12, 10, rowH - 30);
-      ctx.fillStyle = "#f0edf7"; ctx.font = font("700 38px");
+      ctx.fillStyle = "#f0edf7"; ctx.font = F("700 38px");
       ctx.fillText((isMust(it.id) ? "★ " : "") + it.artist.slice(0, 42), 84, y + 46);
-      ctx.fillStyle = "#9a93b0"; ctx.font = font("500 30px");
-      ctx.fillText(`${it.start}–${it.end} · ${stageName(it)}`, 84, y + 84);
+      ctx.fillStyle = "#9a93b0"; ctx.font = F("500 30px");
+      ctx.fillText(`${fmtRange(it.start, it.end)} · ${stageName(it)}`, 84, y + 84);
       if (clashes.has(it.id)) {
-        ctx.fillStyle = "#ff5c6e"; ctx.font = font("700 26px");
+        ctx.fillStyle = "#ff5c6e"; ctx.font = F("700 26px");
         ctx.fillText("CLASH", W - 160, y + 50);
       }
     });
-    ctx.fillStyle = "#9a93b0"; ctx.font = font("500 26px");
-    ctx.fillText(location.host + location.pathname, 48, H - 36);
+    return { cv, ctx };
+  }
+
+  function exportCalendarImage(day, items) {
+    const entries = myEntries(items);
+    const { startMin, endMin } = itemSpan(items);
+    const GUT = 120, COL = 260, headH = 190, stageH = 64, PPM = 2, footH = 80;
+    const W = Math.max(760, GUT + entries.length * COL + 40);
+    const gridTop = headH + stageH;
+    const H = gridTop + (endMin - startMin) * PPM + footH;
+    const { cv, ctx } = exportSetup(W, H, day);
+
+    entries.forEach((e, i) => {
+      const x = GUT + i * COL;
+      ctx.fillStyle = e.color; ctx.fillRect(x, gridTop - 12, COL - 16, 6);
+      ctx.fillStyle = "#f0edf7"; ctx.font = F("700 26px");
+      ctx.fillText(e.label.slice(0, 18), x, gridTop - 26);
+    });
+    for (let m = startMin; m <= endMin; m += 60) {
+      const y = gridTop + (m - startMin) * PPM;
+      ctx.strokeStyle = "#262336"; ctx.beginPath();
+      ctx.moveTo(GUT - 12, y); ctx.lineTo(W - 24, y); ctx.stroke();
+      ctx.fillStyle = "#9a93b0"; ctx.font = F("500 24px");
+      ctx.fillText(hourLabel(m), 24, y + 9);
+    }
+    entries.forEach((e, i) => {
+      layoutLanes(e.sets).forEach(({ set, lane, lanes }) => {
+        const w = (COL - 20) / lanes;
+        const x = GUT + i * COL + lane * w;
+        const y = gridTop + (toMin(set.start) - startMin) * PPM;
+        const h = (toMin(set.end) - toMin(set.start)) * PPM;
+        ctx.fillStyle = e.color + "30";
+        rr(ctx, x, y + 2, w - 8, h - 4, 10); ctx.fill();
+        ctx.fillStyle = e.color; ctx.fillRect(x, y + 2, 6, h - 4);
+        ctx.fillStyle = "#f0edf7"; ctx.font = F("700 24px");
+        ctx.fillText(((isMust(set.id) ? "★ " : "") + set.artist).slice(0, 19), x + 16, y + 34);
+        if (h > 62) {
+          ctx.fillStyle = "#9a93b0"; ctx.font = F("500 20px");
+          ctx.fillText(fmtRange(set.start, set.end), x + 16, y + 60);
+        }
+      });
+    });
+    return { cv, ctx };
+  }
+
+  function exportTimelineImage(day, items) {
+    const entries = myEntries(items);
+    const { startMin, endMin } = itemSpan(items);
+    const LBL = 250, ROW = 120, headH = 190, timeH = 50, PPM = 3, footH = 80;
+    const W = LBL + (endMin - startMin) * PPM + 60;
+    const gridTop = headH + timeH;
+    const H = gridTop + entries.length * ROW + footH;
+    const { cv, ctx } = exportSetup(W, H, day);
+
+    for (let m = startMin; m <= endMin; m += 60) {
+      const x = LBL + (m - startMin) * PPM;
+      ctx.strokeStyle = "#262336"; ctx.beginPath();
+      ctx.moveTo(x, gridTop - 12); ctx.lineTo(x, gridTop + entries.length * ROW); ctx.stroke();
+      ctx.fillStyle = "#9a93b0"; ctx.font = F("500 24px");
+      ctx.fillText(hourLabel(m), x - 26, headH + 30);
+    }
+    entries.forEach((e, i) => {
+      const y = gridTop + i * ROW;
+      ctx.fillStyle = e.color; ctx.fillRect(LBL - 30, y + 14, 6, ROW - 28);
+      ctx.fillStyle = "#f0edf7"; ctx.font = F("700 26px");
+      ctx.fillText(e.label.slice(0, 13), 40, y + ROW / 2 + 9);
+      layoutLanes(e.sets).forEach(({ set, lane, lanes }) => {
+        const h = (ROW - 20) / lanes;
+        const x = LBL + (toMin(set.start) - startMin) * PPM;
+        const w = (toMin(set.end) - toMin(set.start)) * PPM;
+        const yy = y + 10 + lane * h;
+        ctx.fillStyle = e.color + "30";
+        rr(ctx, x + 2, yy, w - 6, h - 4, 10); ctx.fill();
+        ctx.fillStyle = e.color; ctx.fillRect(x + 2, yy, 6, h - 4);
+        ctx.fillStyle = "#f0edf7"; ctx.font = F("700 24px");
+        ctx.fillText(((isMust(set.id) ? "★ " : "") + set.artist).slice(0, Math.max(4, Math.floor(w / 14))), x + 18, yy + 32);
+        if (w > 190 && h > 58) {
+          ctx.fillStyle = "#9a93b0"; ctx.font = F("500 20px");
+          ctx.fillText(fmtRange(set.start, set.end), x + 18, yy + 58);
+        }
+      });
+    });
+    return { cv, ctx };
+  }
+
+  el("dayExportBtn").addEventListener("click", () => {
+    const day = FESTIVAL.days.find(d => d.id === state.lastDay);
+    const items = myItemsForDay(state.lastDay);
+    if (!items.length) { alert("Nothing planned for " + day.label + " yet."); return; }
+    const { cv, ctx } =
+      state.myView === "calendar" ? exportCalendarImage(day, items) :
+      state.myView === "timeline" ? exportTimelineImage(day, items) :
+      exportListImage(day, items);
+    ctx.fillStyle = "#9a93b0"; ctx.font = F("500 26px");
+    ctx.fillText(location.host + location.pathname, 48, cv.height - 32);
     cv.toBlob(async blob => {
-      const file = new File([blob], `tml-w2-${day.id}.png`, { type: "image/png" });
+      const file = new File([blob], `tml-w2-${day.id}-${state.myView}.png`, { type: "image/png" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try { await navigator.share({ files: [file], title: "My " + day.label + " at Tomorrowland" }); return; } catch (e) { /* cancelled */ }
       } else {

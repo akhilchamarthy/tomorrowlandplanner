@@ -260,7 +260,7 @@ body {
   border-top: 1px solid var(--bg3);
   cursor: pointer;
 }
-.set-row .time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; width: 92px; }
+.set-row .time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; width: 122px; }
 .set-row .artist { flex: 1; font-size: 15px; }
 .set-row .star { font-size: 18px; color: var(--bg3); }
 .set-row.starred .star { color: var(--star); }
