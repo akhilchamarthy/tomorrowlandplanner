@@ -14,6 +14,9 @@
     timetableView: "list",
     myView: "list",
     myOrder: {}, // per-day custom order of my-timetable grid stages, e.g. { fri: ["mainstage", "loc:Freedom entrance"] }
+    myName: "",
+    priorities: {}, // itemId -> 2 for must-see
+    friends: [],    // [{ name, color, plan: { starredSetIds, customSets } }]
   });
 
   let state = load();
@@ -62,6 +65,56 @@
     return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  // rough stage positions on a 0-100 grid of the Boom grounds (approximated from public
+  // festival maps of recent editions) — used only to estimate walking minutes between sets
+  const STAGE_POS = {
+    "mainstage": [85, 80],
+    "freedom-by-bud": [25, 25],
+    "the-great-library": [55, 45],
+    "atmosphere": [30, 35],
+    "core": [15, 75],
+    "melodia-by-corona": [20, 50],
+    "the-rose-garden": [50, 60],
+    "elixir": [60, 55],
+    "cage": [35, 20],
+    "the-rave-cave": [45, 30],
+    "planaxis": [75, 60],
+    "crystal-garden": [40, 70],
+    "house-of-fortune-by-jbl": [65, 35],
+    "celestia-by-kucoin": [55, 75],
+    "moose-bar": [35, 50],
+  };
+  function walkMinutes(stageA, stageB) {
+    if (!stageA || !stageB || stageA === stageB) return 0;
+    const a = STAGE_POS[stageA], b = STAGE_POS[stageB];
+    if (!a || !b) return 0;
+    const min = Math.round(Math.hypot(a[0] - b[0], a[1] - b[1]) * 0.25);
+    return Math.max(2, Math.min(20, min));
+  }
+
+  const b64e = s => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const b64d = s => decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/"))));
+
+  // setId -> friends who starred it
+  let FMAP = new Map();
+  function refreshFmap() {
+    FMAP = new Map();
+    state.friends.forEach((f, fi) => {
+      (f.plan.starredSetIds || []).forEach(id => {
+        if (!FMAP.has(id)) FMAP.set(id, []);
+        FMAP.get(id).push(f);
+      });
+      (f.plan.customSets || []).forEach(cs => FMAP.set("fc:" + fi + ":" + cs.id, [f]));
+    });
+  }
+  function chipsHTML(id) {
+    const fs = FMAP.get(id);
+    if (!fs || !fs.length) return "";
+    return `<span class="fchips">${fs.map(f =>
+      `<span class="fchip" style="background:${f.color}" title="${esc(f.name)}">${esc((f.name || "?")[0].toUpperCase())}</span>`).join("")}</span>`;
+  }
+  const isMust = id => state.priorities[id] === 2;
+
   // current festival day + minutes-from-noon in Europe/Brussels
   function brusselsNow() {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -79,7 +132,7 @@
       date = d.toISOString().slice(0, 10);
     }
     const day = FESTIVAL.days.find(d => d.date === date);
-    return { dayId: day ? day.id : null, min };
+    return { dayId: day ? day.id : null, min, date };
   }
 
   // ---------- tabs & day picker ----------
@@ -132,8 +185,8 @@
     const starred = state.starredSetIds.includes(set.id);
     return `<div class="set-row ${starred ? "starred" : ""} ${cls || ""}" data-set="${set.id}">
       <span class="time">${set.start}–${set.end}</span>
-      <span class="artist">${esc(set.artist)}</span>
-      <span class="star">★</span>
+      <span class="artist">${esc(set.artist)}${chipsHTML(set.id)}</span>
+      <span class="star">${starred && isMust(set.id) ? "★★" : "★"}</span>
     </div>`;
   }
 
@@ -302,12 +355,19 @@
   }
 
   function blockHTML(set, style, color, opts) {
-    const cls = opts.mine
-      ? (opts.clashes.has(set.id) ? "clash" : "")
-      : (state.starredSetIds.includes(set.id) ? "starred" : "");
+    let cls = "";
+    if (opts.mine) {
+      const meta = (opts.meta && opts.meta[set.id]) || {};
+      if (meta.ghost) cls = "ghost";
+      else if (opts.clashes.has(set.id)) cls = "clash";
+      if (!meta.ghost && isMust(set.id)) cls += " must";
+    } else if (state.starredSetIds.includes(set.id)) {
+      cls = "starred" + (isMust(set.id) ? " must" : "");
+    }
     return `<div class="cal-block ${cls}" data-set="${set.id}"
       style="${style};--set-color:${color}">
       <div class="b-artist">${esc(set.artist)}</div><div class="b-time">${set.start}–${set.end}</div>
+      ${chipsHTML(set.id)}
     </div>`;
   }
 
@@ -316,9 +376,16 @@
       b.addEventListener("click", () => {
         const id = b.dataset.set;
         if (opts.mine) {
-          // custom entry → edit; starred set → remove from plan
+          // custom entry → edit; starred set → remove; friend's ghost set → add to my plan
           if (state.customSets.some(s => s.id === id)) { openModal(id); return; }
-          state.starredSetIds = state.starredSetIds.filter(x => x !== id);
+          if (state.starredSetIds.includes(id)) {
+            state.starredSetIds = state.starredSetIds.filter(x => x !== id);
+            delete state.priorities[id];
+          } else if (setsById[id]) {
+            state.starredSetIds.push(id);
+          } else {
+            return; // a friend's custom entry — nothing to add
+          }
           save(); renderMine();
         } else {
           const i = state.starredSetIds.indexOf(id);
@@ -516,32 +583,94 @@
     return starred.concat(custom).sort((a, b) => toMin(a.start) - toMin(b.start) || toMin(a.end) - toMin(b.end));
   }
 
+  // my items plus friends' items (ghosts), deduped: my copy wins
+  function planItemsForDay(dayId) {
+    const map = new Map();
+    myItemsForDay(dayId).forEach(s => map.set(s.id, { set: s, mine: true, ghost: false }));
+    state.friends.forEach((f, fi) => {
+      (f.plan.starredSetIds || []).forEach(id => {
+        const s = setsById[id];
+        if (!s || s.dayId !== dayId || map.has(id)) return;
+        map.set(id, { set: s, mine: false, ghost: true });
+      });
+      (f.plan.customSets || []).forEach(cs => {
+        if (cs.dayId !== dayId) return;
+        const id = "fc:" + fi + ":" + cs.id;
+        map.set(id, { set: Object.assign({}, cs, { id }), mine: false, ghost: true });
+      });
+    });
+    return [...map.values()].sort((a, b) =>
+      toMin(a.set.start) - toMin(b.set.start) || toMin(a.set.end) - toMin(b.set.end));
+  }
+
+  // pinned "what's happening for me right now" card (uses today's date, not the selected day)
+  function renderNowStrip() {
+    const box = el("nowStrip");
+    const now = brusselsNow();
+    if (!now.dayId) {
+      const first = FESTIVAL.days[0];
+      const diff = Math.ceil((new Date(first.date) - new Date(now.date)) / 86400000);
+      box.innerHTML = diff > 0
+        ? `<div class="now-card countdown">🎪 ${diff} day${diff === 1 ? "" : "s"} until ${first.label}, July 24</div>`
+        : "";
+      return;
+    }
+    const items = myItemsForDay(now.dayId);
+    const cur = items.filter(s => toMin(s.start) <= now.min && now.min < toMin(s.end));
+    const next = items.find(s => toMin(s.start) > now.min);
+    if (!cur.length && !next) { box.innerHTML = ""; return; }
+    let html = `<div class="now-card">`;
+    cur.forEach(s => {
+      html += `<div class="now-row"><span class="tag now-tag">NOW</span><b>${esc(s.artist)}</b>&nbsp;· ${esc(stageName(s))} · until ${s.end}</div>`;
+    });
+    if (next) {
+      const mins = toMin(next.start) - now.min;
+      const from = cur.length ? cur[cur.length - 1] : null;
+      const walk = from ? walkMinutes(from.stageId, next.stageId) : 0;
+      html += `<div class="now-row"><span class="tag next-tag">NEXT</span><b>${esc(next.artist)}</b>&nbsp;· ${esc(stageName(next))} · in ${mins} min${walk ? ` · ~${walk} min walk` : ""}</div>`;
+    }
+    box.innerHTML = html + `</div>`;
+  }
+
   function renderMine() {
     const box = el("myList");
-    const items = myItemsForDay(state.lastDay);
     const now = brusselsNow();
     const dayLabel = FESTIVAL.days.find(d => d.id === state.lastDay).label;
     myViewSwitch.querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.view === state.myView));
+    renderNowStrip();
 
-    if (!items.length) {
+    const wrapped = planItemsForDay(state.lastDay);
+    const mineItems = wrapped.filter(w => w.mine).map(w => w.set);
+
+    if (!wrapped.length) {
       box.innerHTML = `<div class="empty">Nothing planned for ${dayLabel} yet.<br>Star sets in the Timetable tab, or tap + to add your own entry.</div>`;
       return;
     }
 
-    // clash detection: overlapping intervals
-    const clashes = computeClashes(items);
+    // clash detection (my items only) + tight transitions given walking distance
+    const clashes = computeClashes(mineItems);
+    const tight = {};
+    for (let i = 0; i + 1 < mineItems.length; i++) {
+      const a = mineItems[i], b = mineItems[i + 1];
+      const gap = toMin(b.start) - toMin(a.end);
+      const walk = walkMinutes(a.stageId, b.stageId);
+      if (gap >= 0 && walk > 0 && gap < walk) tight[b.id] = { walk, gap };
+    }
 
     if (state.myView !== "list") {
-      const opts = { mine: true, clashes };
-      if (state.myView === "calendar") renderCalendarView(box, now, myEntries(items), opts);
-      else renderTimelineView(box, now, myEntries(items), opts);
+      const meta = {};
+      wrapped.forEach(w => { meta[w.set.id] = { ghost: w.ghost }; });
+      const opts = { mine: true, clashes, meta };
+      const sets = wrapped.map(w => w.set);
+      if (state.myView === "calendar") renderCalendarView(box, now, myEntries(sets), opts);
+      else renderTimelineView(box, now, myEntries(sets), opts);
       return;
     }
 
     let html = "";
     let nowLinePlaced = false;
-    items.forEach(it => {
-      const isCustom = !!it.custom;
+    wrapped.forEach(({ set: it, mine, ghost }) => {
+      const isCustom = !!it.custom && mine;
       const playing = now.dayId === state.lastDay && now.min >= toMin(it.start) && now.min < toMin(it.end);
       if (now.dayId === state.lastDay && !nowLinePlaced && (playing || toMin(it.start) > now.min)) {
         html += `<div class="now-line">now</div>`;
@@ -549,17 +678,22 @@
       }
       const badges =
         (playing ? `<span class="badge now">NOW</span>` : "") +
-        (clashes.has(it.id) ? `<span class="badge clash">CLASH</span>` : "");
-      const color = isCustom && !it.stageId ? "#8a8a9a" : stageColor(it.stageId);
-      html += `<div class="my-set ${playing ? "now-playing" : ""}" style="border-left-color:${color}">
+        (mine && clashes.has(it.id) ? `<span class="badge clash">CLASH</span>` : "") +
+        (mine && tight[it.id] ? `<span class="badge tight">~${tight[it.id].walk}m walk · ${tight[it.id].gap}m gap</span>` : "") +
+        (mine && isMust(it.id) ? `<span class="badge mustb">MUST</span>` : "");
+      const color = it.stageId ? stageColor(it.stageId) : "#8a8a9a";
+      const prioBtn = `<button class="prio ${isMust(it.id) ? "on" : ""}" data-id="${it.id}" title="Toggle must-see">★★</button>`;
+      html += `<div class="my-set ${playing ? "now-playing" : ""} ${ghost ? "ghost" : ""}" style="border-left-color:${color}">
         <div class="info">
-          <div class="artist">${esc(it.artist)}</div>
+          <div class="artist">${esc(it.artist)}${chipsHTML(it.id)}</div>
           <div class="meta">${it.start}–${it.end} · ${esc(stageName(it))}</div>
         </div>
         <div class="badges">${badges}</div>
-        ${isCustom
-          ? `<button class="edit" data-id="${it.id}" title="Edit">✎</button>`
-          : `<button class="unstar" data-id="${it.id}" title="Remove">★</button>`}
+        ${ghost
+          ? (setsById[it.id] ? `<button class="addghost" data-id="${it.id}" title="Add to my plan">＋</button>` : "")
+          : isCustom
+            ? prioBtn + `<button class="edit" data-id="${it.id}" title="Edit">✎</button>`
+            : prioBtn + `<button class="unstar" data-id="${it.id}" title="Remove">★</button>`}
       </div>`;
     });
     if (now.dayId === state.lastDay && !nowLinePlaced) html += `<div class="now-line">now</div>`;
@@ -567,10 +701,20 @@
 
     box.querySelectorAll("button.unstar").forEach(b => b.addEventListener("click", () => {
       state.starredSetIds = state.starredSetIds.filter(id => id !== b.dataset.id);
+      delete state.priorities[b.dataset.id];
       save(); renderMine();
       if (!views.timetable.hidden) renderTimetable();
     }));
     box.querySelectorAll("button.edit").forEach(b => b.addEventListener("click", () => openModal(b.dataset.id)));
+    box.querySelectorAll("button.prio").forEach(b => b.addEventListener("click", () => {
+      const id = b.dataset.id;
+      if (state.priorities[id] === 2) delete state.priorities[id]; else state.priorities[id] = 2;
+      save(); renderMine();
+    }));
+    box.querySelectorAll("button.addghost").forEach(b => b.addEventListener("click", () => {
+      state.starredSetIds.push(b.dataset.id);
+      save(); renderMine();
+    }));
   }
 
   // ---------- custom entry modal ----------
@@ -672,7 +816,144 @@
         save(); renderStages();
       });
     });
+
+    renderFriends();
   }
+
+  // ---------- share & friends ----------
+  const FRIEND_COLORS = ["#f2a33c", "#3d9df2", "#2ecc71", "#d75ce6", "#ff7043", "#f5d90a", "#1abc9c", "#e6483d"];
+
+  el("sharePlanBtn").addEventListener("click", async () => {
+    if (!state.myName) {
+      const n = prompt("Your name (shown on friends' timetables):");
+      if (!n || !n.trim()) return;
+      state.myName = n.trim().slice(0, 20);
+      save();
+    }
+    const payload = {
+      v: 1, name: state.myName,
+      starredSetIds: state.starredSetIds,
+      customSets: state.customSets,
+      priorities: state.priorities,
+    };
+    const url = location.origin + location.pathname + "#share=" + b64e(JSON.stringify(payload));
+    if (navigator.share) {
+      try { await navigator.share({ title: "My Tomorrowland W2 plan", url }); } catch (e) { /* user cancelled */ }
+    } else {
+      try {
+        await navigator.clipboard.writeText(url);
+        alert("Share link copied — paste it in the group chat.");
+      } catch (e) {
+        prompt("Copy this link:", url);
+      }
+    }
+  });
+
+  function renderFriends() {
+    const box = el("friendList");
+    box.innerHTML = state.friends.map((f, i) => `
+      <div class="friend-row">
+        <span class="fchip big" style="background:${f.color}">${esc((f.name || "?")[0].toUpperCase())}</span>
+        <span class="name">${esc(f.name)} <span class="sub">${(f.plan.starredSetIds || []).length + (f.plan.customSets || []).length} items</span></span>
+        <button class="rm" data-i="${i}" title="Remove">✕</button>
+      </div>`).join("");
+    box.querySelectorAll(".rm").forEach(b => b.addEventListener("click", () => {
+      state.friends.splice(+b.dataset.i, 1);
+      save(); refreshFmap(); renderStages();
+    }));
+  }
+
+  function handleIncomingShare() {
+    const m = location.hash.match(/share=([A-Za-z0-9\-_]+)/);
+    if (!m) return;
+    history.replaceState(null, "", location.pathname + location.search);
+    let p;
+    try { p = JSON.parse(b64d(m[1])); } catch (e) { return; }
+    if (!p || !Array.isArray(p.starredSetIds)) return;
+    showShareSheet(p);
+  }
+
+  function showShareSheet(p) {
+    const name = String(p.name || "A friend").slice(0, 20);
+    const n = p.starredSetIds.length + (p.customSets || []).length;
+    const bd = document.createElement("div");
+    bd.className = "modal-backdrop";
+    bd.innerHTML = `<div class="modal">
+      <h2>${esc(name)} shared a plan</h2>
+      <p class="hint">${n} item${n === 1 ? "" : "s"}. Add it as an overlay on your timetable, or replace your own plan with it.</p>
+      <div class="modal-btns stacked">
+        <button class="primary" data-act="friend">Add as friend</button>
+        <button data-act="mine">Make it my plan</button>
+        <button data-act="close">Dismiss</button>
+      </div>
+    </div>`;
+    document.body.appendChild(bd);
+    bd.addEventListener("click", e => {
+      const act = e.target.dataset ? e.target.dataset.act : null;
+      if (e.target === bd || act === "close") { bd.remove(); return; }
+      if (act === "friend") {
+        const plan = { starredSetIds: p.starredSetIds, customSets: p.customSets || [] };
+        const existing = state.friends.find(f => f.name === name);
+        if (existing) existing.plan = plan;
+        else state.friends.push({ name, color: FRIEND_COLORS[state.friends.length % FRIEND_COLORS.length], plan });
+        save(); refreshFmap(); render();
+        bd.remove();
+      } else if (act === "mine") {
+        if (!confirm("Replace your current plan? Your stars and custom entries will be overwritten.")) return;
+        state.starredSetIds = p.starredSetIds;
+        state.customSets = p.customSets || [];
+        state.priorities = p.priorities || {};
+        save(); render();
+        bd.remove();
+      }
+    });
+  }
+
+  // ---------- day image export ----------
+  el("dayExportBtn").addEventListener("click", () => {
+    const day = FESTIVAL.days.find(d => d.id === state.lastDay);
+    const items = myItemsForDay(state.lastDay);
+    if (!items.length) { alert("Nothing planned for " + day.label + " yet."); return; }
+    const W = 1080, headH = 200, rowH = 96, footH = 90;
+    const H = headH + items.length * rowH + footH;
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    const font = w => `${w} -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.fillStyle = "#12101a"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#b18cff"; ctx.font = font("700 34px");
+    ctx.fillText("TOMORROWLAND W2 2026", 48, 82);
+    ctx.fillStyle = "#f0edf7"; ctx.font = font("800 58px");
+    ctx.fillText(day.label + (state.myName ? " · " + state.myName : ""), 48, 152);
+    const clashes = computeClashes(items);
+    items.forEach((it, i) => {
+      const y = headH + i * rowH;
+      ctx.fillStyle = it.stageId ? stageColor(it.stageId) : "#8a8a9a";
+      ctx.fillRect(48, y + 12, 10, rowH - 30);
+      ctx.fillStyle = "#f0edf7"; ctx.font = font("700 38px");
+      ctx.fillText((isMust(it.id) ? "★ " : "") + it.artist.slice(0, 42), 84, y + 46);
+      ctx.fillStyle = "#9a93b0"; ctx.font = font("500 30px");
+      ctx.fillText(`${it.start}–${it.end} · ${stageName(it)}`, 84, y + 84);
+      if (clashes.has(it.id)) {
+        ctx.fillStyle = "#ff5c6e"; ctx.font = font("700 26px");
+        ctx.fillText("CLASH", W - 160, y + 50);
+      }
+    });
+    ctx.fillStyle = "#9a93b0"; ctx.font = font("500 26px");
+    ctx.fillText(location.host + location.pathname, 48, H - 36);
+    cv.toBlob(async blob => {
+      const file = new File([blob], `tml-w2-${day.id}.png`, { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: "My " + day.label + " at Tomorrowland" }); return; } catch (e) { /* cancelled */ }
+      } else {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = file.name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }
+    });
+  });
 
   // ---------- backup ----------
   el("exportBtn").addEventListener("click", () => {
@@ -696,16 +977,19 @@
 
   // ---------- render ----------
   function render() {
+    refreshFmap();
     dayPicker.querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.day === state.lastDay));
     if (activeTab === "timetable") renderTimetable();
     else if (activeTab === "mine") renderMine();
     else renderStages();
   }
   render();
+  handleIncomingShare();
 
   // refresh "now" highlighting every minute (grid views move the rule in place to keep scroll position)
   setInterval(() => {
     if (activeTab === "stages") return;
+    if (activeTab === "mine") renderNowStrip();
     if (document.querySelector(".cal-scroll")) updateNowRules();
     else if (activeTab === "mine") renderMine();
     else renderTimetable();

@@ -3,9 +3,10 @@
 Personal timetable planner for Tomorrowland Belgium 2026, Weekend 2 (Jul 24–26).
 Offline-first PWA — static files, no build step, no dependencies.
 
-- **Timetable** — full official set times for all 15 stages; tap a set to star it
-- **My Timetable** — starred + custom entries per day, with clash warnings and a live "now" marker (Europe/Brussels)
-- **Stages** — hide/reorder stages, per-stage accent colors, export/import backup
+- **Timetable** — full official set times for all 15 stages in list, calendar, or timeline view; tap a set to star it
+- **My Timetable** — starred + custom entries per day with clash warnings, walking-time "tight transition" warnings, must-see priorities, a Now & Next strip, and a shareable day image
+- **Friends** — share your plan as a link; friends' plans overlay on your timetable with initials
+- **Stages** — visited checklist, hide stages, per-stage accent colors, export/import backup
 
 ## Use on iPhone
 

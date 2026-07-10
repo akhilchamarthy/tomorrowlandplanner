@@ -36,10 +36,14 @@
     </section>
 
     <section id="view-mine" class="view" hidden>
-      <div class="view-switch" id="myViewSwitch">
-        <button data-view="list">List</button>
-        <button data-view="calendar">Calendar</button>
-        <button data-view="timeline">Timeline</button>
+      <div id="nowStrip"></div>
+      <div class="switch-row">
+        <div class="view-switch" id="myViewSwitch">
+          <button data-view="list">List</button>
+          <button data-view="calendar">Calendar</button>
+          <button data-view="timeline">Timeline</button>
+        </div>
+        <button id="dayExportBtn" title="Share this day as an image">📸</button>
       </div>
       <div id="myList"></div>
       <button class="fab" id="addCustomBtn" title="Add custom entry">+</button>
@@ -48,6 +52,12 @@
     <section id="view-stages" class="view" hidden>
       <p class="hint">✓ marks stages where you've starred a set<br>👁 / 🚫 hides and unhides a stage from view</p>
       <div id="stageList"></div>
+      <div class="friends">
+        <h2>Friends</h2>
+        <p class="hint">Send your plan to the group chat — friends who open the link can overlay your sets on their timetable. Open a friend's link to add theirs.</p>
+        <button id="sharePlanBtn" class="wide-btn">Share my plan</button>
+        <div id="friendList"></div>
+      </div>
       <div class="backup">
         <h2>Backup</h2>
         <p class="hint">iOS can evict web app storage. Export your plan as text and keep it in Notes.</p>
