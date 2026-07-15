@@ -940,6 +940,40 @@
     else ctx.rect(x, y, w, h);
   }
 
+  function fitLine(ctx, text, maxW) {
+    if (ctx.measureText(text).width <= maxW) return text;
+    let t = text;
+    while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+    return t + "…";
+  }
+
+  // wrap into at most maxLines lines, ellipsizing what doesn't fit
+  function wrapText(ctx, text, maxW, maxLines) {
+    const words = String(text).split(/\s+/);
+    const lines = [];
+    let cur = "";
+    words.forEach(w => {
+      const test = cur ? cur + " " + w : w;
+      if (!cur || ctx.measureText(test).width <= maxW) cur = test;
+      else { lines.push(cur); cur = w; }
+    });
+    if (cur) lines.push(cur);
+    if (lines.length > maxLines) {
+      const rest = lines.slice(maxLines - 1).join(" ");
+      lines.length = maxLines - 1;
+      lines.push(rest);
+    }
+    return lines.map(l => fitLine(ctx, l, maxW));
+  }
+
+  // longest time format that fits: "7:40 PM–8:40 PM" → "7:40–8:40" → "7:40"
+  function fitTime(ctx, set, maxW) {
+    const short = t => { const [h, m] = t.split(":").map(Number); return `${h % 12 || 12}:${String(m).padStart(2, "0")}`; };
+    const options = [fmtRange(set.start, set.end), `${short(set.start)}–${short(set.end)}`, short(set.start)];
+    for (const o of options) if (ctx.measureText(o).width <= maxW) return o;
+    return "";
+  }
+
   function itemSpan(items) {
     let start = Infinity, end = 0;
     items.forEach(s => {
@@ -1001,11 +1035,15 @@
         ctx.fillStyle = e.color + "30";
         rr(ctx, x, y + 2, w - 8, h - 4, 10); ctx.fill();
         ctx.fillStyle = e.color; ctx.fillRect(x, y + 2, 6, h - 4);
+        const maxW = w - 30;
         ctx.fillStyle = "#f0edf7"; ctx.font = F("700 24px");
-        ctx.fillText(((isMust(set.id) ? "★ " : "") + set.artist).slice(0, 19), x + 16, y + 34);
-        if (h > 62) {
-          ctx.fillStyle = "#9a93b0"; ctx.font = F("500 20px");
-          ctx.fillText(fmtRange(set.start, set.end), x + 16, y + 60);
+        const nameLines = wrapText(ctx, (isMust(set.id) ? "★ " : "") + set.artist, maxW, h >= 94 ? 2 : 1);
+        nameLines.forEach((ln, li) => ctx.fillText(ln, x + 16, y + 34 + li * 27));
+        const timeY = 34 + nameLines.length * 27;
+        if (timeY <= h - 6) {
+          ctx.fillStyle = "#9a93b0"; ctx.font = F("500 19px");
+          const ts = fitTime(ctx, set, maxW);
+          if (ts) ctx.fillText(ts, x + 16, y + timeY);
         }
       });
     });
@@ -1041,11 +1079,15 @@
         ctx.fillStyle = e.color + "30";
         rr(ctx, x + 2, yy, w - 6, h - 4, 10); ctx.fill();
         ctx.fillStyle = e.color; ctx.fillRect(x + 2, yy, 6, h - 4);
+        const maxW = w - 32;
         ctx.fillStyle = "#f0edf7"; ctx.font = F("700 24px");
-        ctx.fillText(((isMust(set.id) ? "★ " : "") + set.artist).slice(0, Math.max(4, Math.floor(w / 14))), x + 18, yy + 32);
-        if (w > 190 && h > 58) {
-          ctx.fillStyle = "#9a93b0"; ctx.font = F("500 20px");
-          ctx.fillText(fmtRange(set.start, set.end), x + 18, yy + 58);
+        const nameLines = wrapText(ctx, (isMust(set.id) ? "★ " : "") + set.artist, maxW, h >= 92 ? 2 : 1);
+        nameLines.forEach((ln, li) => ctx.fillText(ln, x + 18, yy + 32 + li * 27));
+        const timeY = 32 + nameLines.length * 27;
+        if (timeY <= h - 6) {
+          ctx.fillStyle = "#9a93b0"; ctx.font = F("500 19px");
+          const ts = fitTime(ctx, set, maxW);
+          if (ts) ctx.fillText(ts, x + 18, yy + timeY);
         }
       });
     });
